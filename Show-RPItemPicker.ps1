@@ -109,7 +109,7 @@ function Show-RPItemPicker {
     }
 
     # Filter the original items based on the selected item IDs
-    $script:selectedItems = $script:items | Where-Object { $script:selectedItemDetails.Id -contains $_.FQID.ObjectId }
+    $script:selectedItems = $itemPickerControl.SelectedItems | Where-Object { $script:selectedItemDetails.Id -contains $_.FQID.ObjectId }
 
     # Debug output to check what is being returned
     Write-Verbose "Returning items: $($script:selectedItems.Count)"
