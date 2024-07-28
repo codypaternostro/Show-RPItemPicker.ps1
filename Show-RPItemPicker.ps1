@@ -1,21 +1,16 @@
-# After working with Josh's show-camera for powershell I was able to understand WPF and it's uses with MIPSDK
-# https://gist.github.com/joshooaj/9cf16a92c7e57496b6156928a22f758f
-# I noticed VideoOS.Platform.UI.ItemPickerWpfUserControl released from the MIPSDK
-# https://doc.developer.milestonesys.com/html/index.html?base=miphelp/class_video_o_s_1_1_platform_1_1_u_i_1_1_item_picker_user_control.html&tree=tree_search.html?search=itempickeruser
-# This still needs to be tested more, but it offers a way to search via text for items available on XProtect VMS of items in WPF window.function Show-RPItemPicker
-
 function Show-RPItemPicker {
     [CmdletBinding()]
     param (
         [Parameter()]
         [string]$Title = "Select Item(s)",
         [Parameter()]
-        [string[]]$Kind
+        [string[]]$Kind,
+        [Parameter()]
+        [switch]$ConfigItemsCamsOnly
     )
 
+    #import-module C:\RemotePro\RemotePro\RemotePro.psd1
     Add-Type -AssemblyName PresentationFramework
-    #Install-Module MilestonePSTools
-    Assert-VmsRequirementsMet
 
     # Define the XAML with the button included
     $xaml = @"
@@ -40,9 +35,8 @@ function Show-RPItemPicker {
     # Load the XAML
     $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
-    # Create an instance of the ItemPickerWpfUserControl using reflection
-    $itemPickerType = [VideoOS.Platform.UI.ItemPickerWpfUserControl]
-    $itemPickerControl = [Activator]::CreateInstance($itemPickerType)
+    # Create an instance of the ItemPickerWpfUserControl
+    $itemPickerControl = New-Object VideoOS.Platform.UI.ItemPickerWpfUserControl
 
     # Set properties to customize the behavior of the control
     $itemPickerControl.AllowGroupSelection = $true
@@ -53,19 +47,44 @@ function Show-RPItemPicker {
     $itemPickerControl.SearchPlaceholderText = "Search for items..."
     $itemPickerControl.TableHeader = "Selected Items"
 
-    # Retrieve items from the server based on Kind
-    $script:items = @()
-    if ($Kind -and $Kind.Count -gt 0) {
-        foreach ($kindName in $Kind) {
-            $script:items += Get-VmsVideoOSItem -Kind ([VideoOS.Platform.Kind]::$kindName) -ItemHierarchy 'SystemDefined' -FolderType 'SystemDefined'
+    # Initialize the items list
+    $itemsList = New-Object 'System.Collections.Generic.List[VideoOS.Platform.Item]'
+
+    function Get-KindGuid {
+        param ($kindName)
+        switch ($kindName) {
+            "Camera" { return [VideoOS.Platform.Kind]::Camera }
+            "Hardware" { return [VideoOS.Platform.Kind]::Hardware }
+            "Server" { return [VideoOS.Platform.Kind]::Server }
+            default { throw "Unknown kind: $kindName" }
         }
-    } else {
-        $script:items = Get-VmsVideoOSItem -ItemHierarchy 'SystemDefined' -FolderType 'SystemDefined' -Verbose
     }
 
-    if ($null -ne $script:items -and $script:items.Count -gt 0) {
-        # Cast items to the correct type
-        $itemPickerControl.Items = [System.Collections.Generic.List[VideoOS.Platform.Item]]$script:items
+    # Retrieve items from the server based on Kind
+    if ($Kind -and $Kind.Count -gt 0) {
+        foreach ($kindName in $Kind) {
+            $kindGuid = Get-KindGuid -kindName $kindName
+            $items = Get-VmsVideoOSItem -Kind $kindGuid -ItemHierarchy 'SystemDefined' -FolderType 'SystemDefined'
+            if ($items) {
+                foreach ($item in $items) {
+                    if ($item -is [VideoOS.Platform.Item]) {
+                        $itemsList.Add($item)
+                    }
+                }
+            }
+        }
+    } else {
+        $items = Get-VmsVideoOSItem -ItemHierarchy 'SystemDefined' -FolderType 'SystemDefined' -Verbose
+        foreach ($item in $items) {
+            if ($item -is [VideoOS.Platform.Item]) {
+                $itemsList.Add($item)
+            }
+        }
+    }
+
+    if ($itemsList.Count -gt 0) {
+        # Set the Items property directly
+        $itemPickerControl.Items = $itemsList
     } else {
         Write-Verbose "No items retrieved from the server"
     }
@@ -97,6 +116,106 @@ function Show-RPItemPicker {
 
         # Show the WPF window
         $window.ShowDialog() | Out-Null
+
+        # Filter the original items based on the selected item IDs
+        $script:selectedItems = $itemPickerControl.SelectedItems | Where-Object { $script:selectedItemDetails.Id -contains $_.FQID.ObjectId }
+
+        # Debug output to check what is being returned
+        Write-Verbose "Returning items: $($script:selectedItems.Count)"
+        foreach ($item in $script:selectedItems) {
+            Write-Verbose "Returning item: Name=$($item.Name), Id=$($item.FQID.ObjectId), FQID=$($item.FQID)"
+        }
+
+        # Switch and logic for return items of type VideoOS.Platform.ConfigurationItems.Camera
+        if ($ConfigItemsCamsOnly){
+            # Final type = VideoOS.Platform.ConfigurationItems.Camera
+            $cameras = [System.Collections.Generic.List[VideoOS.Platform.ConfigurationItems.Camera]]::new()
+
+
+            foreach ($item in $script:selectedItems){
+                switch ($item.GetType().FullName) { #Switches ensures selected object types get handled correctly.
+                    #region Camera Items
+                    "VideoOS.Platform.SDK.Platform.CameraItem" {
+                        # Convert Camera objects from type Platform to Configruation
+                        $camera = Get-VmsCamera -Id $item.FQID.ObjectId
+                        $cameras.Add($camera)
+                    }
+                    #endregion
+
+                    #region Hardware Items
+                    "VideoOS.Platform.SDK.Platform.HardwareItem" {
+                        # Convert Hardware objects from type Platform to Configuration
+                        $configItemCam = Get-VmsHardware -id $item.FQID.ObjectId.ToString() | Get-VmsCamera
+                        $cameras.Add($configItemCam)
+                    }
+                    #endregion
+
+                    #region All Hardware folders
+                    "VideoOS.Platform.SDK.Platform.HardwareFolderItem" {
+                        # VideoOS.Platform.SDK.Platform.HardwareFolderItem
+                        $hwFolder = $item.GetChildren()
+
+                        # VideoOS.Platform.ConfigurationItems.Hardware
+                        $hwItems = $hwFolder.Values | Get-VmsHardware
+
+                        # Final Conversion: Completed type to VideoOS.Platform.SDK.Platform.CameraItem
+                        foreach ($hw in $hwItems) {
+                            $configItemCam = $hw | Get-VmsCamera
+                            $cameras.Add($configItemCam)
+                        }
+                    }
+                    #endregion
+
+                    #region All Camera folders
+                    "VideoOS.Platform.SDK.Platform.AllRSFolderItem" {
+                        # VideoOS.Platform.SDK.Platform.AllRSFolderItem
+                        $camFolder = $item.GetChildren()
+
+                        # Final Conversion: Completed type to VideoOS.Platform.SDK.Platform.CameraItem
+                        foreach ($cam in $camFolder) {
+                            $camera = Get-VmsCamera -Id $cam.FQID.ObjectId
+                            $cameras.Add($camera)
+                        }
+                    }
+                    #endregion
+
+                    #region Recording Server Folders
+                    "VideoOS.Platform.SDK.Platform.ServerFolderByTypeItem" {
+                        # Unnroll recording servers
+                        $srvFolderChildren = $item.GetChildren()
+
+
+                        Write-Host "Doink!"
+                        # (plural) VideoOS.Platform.SDK.Platform.RecorderFolderByTypeItem to VideoOS.Platform.ConfigurationItems.RecordingServer
+                        $recServers = $srvFolderChildren | Get-RecordingServer
+
+
+                        # Final Conversion: Completed type to VideoOS.Platform.SDK.Platform.CameraItem
+                        foreach ($server in $recServers) {
+                            $server | Get-VmsHardware | Get-VmsCamera | ForEach-Object { $cameras.Add($_) }
+                        }
+                    }
+                    #endregion
+
+                    #region Recording Servers
+                    "VideoOS.Platform.SDK.Platform.ServerFolderByTypeItem" {
+                        # (single) VideoOS.Platform.SDK.Platform.RecorderFolderByTypeItem to VideoOS.Platform.ConfigurationItems.RecordingServer
+                        $recServer = $item | Get-RecordingServer
+
+                        # Final Conversion: Completed type to VideoOS.Platform.SDK.Platform.CameraItem
+                        $recServer | Get-VmsHardware | Get-VmsCamera | ForEach-Object { $cameras.Add($_) }
+                    }
+                    #endregion
+                }
+            }
+
+            return $cameras #VideoOS.Platform.SDK.Platform.CameraItem
+        } else {
+            return $script:selectedItems # VideoOS.Platform.SDK.Platform type objects
+        }
+    }
+    catch {
+        Write-Error "An error occurred: $_"
     }
     finally {
         # Properly dispose of the window and control
@@ -107,19 +226,4 @@ function Show-RPItemPicker {
             $window.Close()
         }
     }
-
-    # Filter the original items based on the selected item IDs
-    $script:selectedItems = $itemPickerControl.SelectedItems | Where-Object { $script:selectedItemDetails.Id -contains $_.FQID.ObjectId }
-
-    # Debug output to check what is being returned
-    Write-Verbose "Returning items: $($script:selectedItems.Count)"
-    foreach ($item in $script:selectedItems) {
-        Write-Verbose "Returning item: Name=$($item.Name), Id=$($item.FQID.ObjectId), FQID=$($item.FQID)"
-    }
-
-    return $script:selectedItems
 }
-
-# Example of using this window with MilestonePSTools active connection in your shell.
-$selectedItems = Show-RPItemPicker -Title "Custom Item Picker" -Kind @("Camera", "Hardware") -Verbose
-$selectedItems | ForEach-Object { Write-Host "Selected item: Id=$($_.FQID.ObjectId), Name=$($_.Name), FQID=$($_.FQID)" }
