@@ -1,11 +1,19 @@
 function Show-RPItemPicker {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName='VideoOS.Platform.SDK.Platform')]
     param (
-        [Parameter()]
+        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.SDK.Platform')]
+        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.ConfigurationItems')]
         [string]$Title = "Select Item(s)",
-        [Parameter()]
+
+        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.SDK.Platform')]
+        [ValidateSet("Camera", "Hardware", "Server", "Other")]
         [string[]]$Kind,
-        [Parameter()]
+
+        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.ConfigurationItems')]
+        [ValidateSet("Camera", "Hardware", "Server")]
+        [string[]]$Kind,
+
+        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.ConfigurationItems')]
         [switch]$ConfigItemsCamsOnly
     )
 
@@ -136,7 +144,7 @@ function Show-RPItemPicker {
                 switch ($item.GetType().FullName) { #Switches ensures selected object types get handled correctly.
                     #region Camera Items
                     "VideoOS.Platform.SDK.Platform.CameraItem" {
-                        # Convert Camera objects from type Platform to Configruation
+                        # Convert Camera objects from type Platform.SDK to Configuration
                         $camera = Get-VmsCamera -Id $item.FQID.ObjectId
                         $cameras.Add($camera)
                     }
@@ -144,7 +152,7 @@ function Show-RPItemPicker {
 
                     #region Hardware Items
                     "VideoOS.Platform.SDK.Platform.HardwareItem" {
-                        # Convert Hardware objects from type Platform to Configuration
+                        # Convert Hardware objects from type Platform to Configruation
                         $configItemCam = Get-VmsHardware -id $item.FQID.ObjectId.ToString() | Get-VmsCamera
                         $cameras.Add($configItemCam)
                     }
