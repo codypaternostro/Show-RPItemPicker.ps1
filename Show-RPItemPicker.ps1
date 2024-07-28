@@ -2,18 +2,13 @@ function Show-RPItemPicker {
     [CmdletBinding(DefaultParameterSetName='VideoOS.Platform.SDK.Platform')]
     param (
         [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.SDK.Platform')]
-        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.ConfigurationItems')]
         [string]$Title = "Select Item(s)",
 
         [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.SDK.Platform')]
-        [ValidateSet("Camera", "Hardware", "Server", "Other")]
-        [string[]]$Kind,
-
-        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.ConfigurationItems')]
         [ValidateSet("Camera", "Hardware", "Server")]
         [string[]]$Kind,
 
-        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.ConfigurationItems')]
+        [Parameter(Mandatory=$true, ParameterSetName='VideoOS.Platform.SDK.Platform')]
         [switch]$ConfigItemsCamsOnly
     )
 
